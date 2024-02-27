@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	errors "remote-script/utils/errors"
+	errors "chain_info/utils/errors"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -30,6 +30,7 @@ func ConnectSSH(addr, user, privKeyPath string) (*ssh.Session, error) {
 	if !strings.Contains(addr, ":") {
 		addr += ":22"
 	}
+
 	// SSH 연결
 	client, err := ssh.Dial("tcp", addr, config)
 	errors.HandleError(err, "Failed to dial SSH connection")

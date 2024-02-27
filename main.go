@@ -1,13 +1,15 @@
 package main
 
 import (
-	"chain_info/utils/errors"
-	"chain_info/utls/ssh"
 	"fmt"
 	"html/template"
 	"io/ioutil"
 	"net/http"
 	"os"
+	"strings"
+
+	"chain_info/utils/errors"
+	"chain_info/utils/ssh"
 
 	"github.com/joho/godotenv"
 )
@@ -19,7 +21,7 @@ type HostInfo struct {
 
 const (
 	ScriptsDir = "./scripts/"
-	ConfigPath = "./config/config.env"
+	ConfigDir  = "/Users/joohyung/.ssh/config.d/"
 	EnvPath    = "./.env"
 )
 
@@ -34,7 +36,17 @@ func main() {
 	})
 
 	http.HandleFunc("/host-info", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "statics/host-info.html")
+		host := r.URL.Query().Get("host")
+		if host == "" {
+			http.Error(w, "parameter is missing", http.StatusBadRequest)
+			return
+		}
+		hostInfo, err := getHostInfo(host)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to get host info: %v", err), http.StatusInternalServerError)
+			return
+		}
+		renderTemplate(w, "statics/host-info.html", hostInfo)
 	})
 
 	fmt.Println("Server is running on port 8080...")
@@ -42,7 +54,7 @@ func main() {
 }
 
 func getHostList() []HostInfo {
-	files, err := ioutil.ReadDir(os.Getenv("HOME") + "/.ssh/config.d")
+	files, err := ioutil.ReadDir(ConfigDir)
 	if err != nil {
 		fmt.Println("Error reading directory:", err)
 		return nil
@@ -51,7 +63,7 @@ func getHostList() []HostInfo {
 	var hostList []HostInfo
 	for _, file := range files {
 		if !file.IsDir() {
-			filePath := os.Getenv("HOME") + "/.ssh/config.d/" + file.Name()
+			filePath := ConfigDir + file.Name()
 			hosts, err := getHosts(filePath)
 			if err != nil {
 				fmt.Println("Error reading file:", err)
@@ -67,50 +79,91 @@ func getHostList() []HostInfo {
 }
 
 func getHosts(filePath string) ([]string, error) {
-	// SSH 설정
-	err := godotenv.Load(EnvPath)
-	errors.HandleError(err, "Failed to load .env")
-	configEnv, err := godotenv.Read(ConfigPath)
-	errors.HandleError(err, "Failed to load config.env")
-
-	user := configEnv["REMOTE_USER"]
-	addr := configEnv["REMOTE_ADDR"]
-	privKey := os.Getenv("PRIVATE_KEY")
-
-	// SSH 세션 시작
-	session, err := ssh.ConnectSSH(addr, user, privKey)
-	errors.HandleError(err, "Failed to start SSH session")
-	defer session.Close()
-
-	// 스크립트 로드
-	scriptFileName := os.Args[1]
-	scriptPath := ScriptsDir + scriptFileName
-	script, err := ioutil.ReadFile(scriptPath)
-	errors.HandleError(err, "Failed to read script file")
-
-	// 원격 서버에서 스크립트 실행
-	err = session.Run("source $HOME/.profile; " + string(script))
-	errors.HandleError(err, "Failed to execute script")
-
+	content, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(content), "\n")
+	var hosts []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Host ") {
+			hosts = append(hosts, strings.TrimSpace(line[5:]))
+		}
+	}
+	return hosts, nil
 }
 
-func getHostInfo(hostName string) HostInfo {
-	// Host 정보를 기반으로 SSH 연결을 수행하고 Host 정보를 반환
-	addr := fmt.Sprintf("%s:%d", hostName, 22) // 예: "141.94.248.105:22"
-	user := "sei"                              // 예: "sei"
-	privKeyPath := os.Getenv("HOME") + "/.env" // .env 파일 경로
+func getHostInfo(host string) (HostInfo, error) {
+	err := godotenv.Load(EnvPath)
+	errors.HandleError(err, "Failed to load .env")
 
-	session, err := ssh.ConnectSSH(addr, user, privKeyPath)
+	// 구성 디렉토리에서 파일 목록 가져오기
+	files, err := ioutil.ReadDir(ConfigDir)
+	if err != nil {
+		errors.HandleError(err, "Failed to read config directory")
+	}
+
+	// 호스트에 해당하는 섹션 찾기
+	var hostSection string
+	for _, file := range files {
+		filePath := ConfigDir + "/" + file.Name()
+		content, err := ioutil.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+
+		lines := strings.Split(string(content), "\n")
+		for i, line := range lines {
+			if strings.TrimSpace(line) == "Host "+host {
+				// 호스트에 해당하는 섹션 발견
+				hostSection = strings.Join(lines[i:], "\n")
+				break
+			}
+		}
+		if hostSection != "" {
+			break
+		}
+	}
+
+	// 호스트 섹션에서 HostName과 User 추출
+	var hostName, user, port string
+	privKey := os.Getenv("PRIVATE_KEY")
+
+	lines := strings.Split(hostSection, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "HostName") {
+			hostName = strings.TrimSpace(strings.Split(line, " ")[1])
+		} else if strings.HasPrefix(line, "User") {
+			user = strings.TrimSpace(strings.Split(line, " ")[1])
+		} else if strings.HasPrefix(line, "Port") {
+			port = strings.TrimSpace(strings.Split(line, " ")[1])
+		}
+	}
+
+	addr := hostName
+	if port != "" {
+		addr = fmt.Sprintf("%s:%s", hostName, port)
+	}
+
+	session, err := ssh.ConnectSSH(addr, user, privKey)
 	if err != nil {
 		fmt.Println("Failed to establish SSH connection:", err)
-		return HostInfo{}
+		// return errors
 	}
 	defer session.Close()
 
-	return HostInfo{
-		// HostName: hostName,
-		// User:     user,
+	scriptFileName := "show_node.sh"
+	scriptPath := ScriptsDir + scriptFileName
+	script, err := ioutil.ReadFile(scriptPath)
+
+	// 원격 서버에서 스크립트 실행
+	cmd := "source $HOME/.profile; " + ScriptsDir + string(script)
+	if err := session.Run(cmd); err != nil {
+		fmt.Println("Failed to execute script:", err)
+		return HostInfo{}, err
 	}
+
+	return HostInfo{}, nil
 }
 
 func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {

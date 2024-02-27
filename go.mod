@@ -1,4 +1,4 @@
-module remote-script
+module chain_info
 
 go 1.21.5
 
