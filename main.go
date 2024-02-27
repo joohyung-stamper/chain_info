@@ -1,44 +1,85 @@
 package main
 
 import (
+	"fmt"
+	"html/template"
 	"io/ioutil"
+	"net/http"
 	"os"
-
-	errors "remote-script/utils/errors"
-	ssh "remote-script/utils/ssh"
-
-	"github.com/joho/godotenv"
+	"strings"
 )
 
-const (
-	ScriptsDir = "./scripts/"
-	ConfigPath = "./config/config.env"
-	EnvPath    = "./.env"
-)
+type HostInfo struct {
+	FileName string
+	Hosts    []string
+}
 
 func main() {
-	// SSH 설정
-	err := godotenv.Load(EnvPath)
-	errors.HandleError(err, "Failed to load .env")
-	configEnv, err := godotenv.Read(ConfigPath)
-	errors.HandleError(err, "Failed to load config.env")
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		hostList := getHostList()
+		renderTemplate(w, "statics/index.html", hostList)
+	})
 
-	user := configEnv["REMOTE_USER"]
-	addr := configEnv["REMOTE_ADDR"]
-	privKey := os.Getenv("PRIVATE_KEY")
+	http.HandleFunc("/host-info", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "statics/host-info.html")
+	})
 
-	// SSH 세션 시작
-	session, err := ssh.ConnectSSH(addr, user, privKey)
-	errors.HandleError(err, "Failed to start SSH session")
-	defer session.Close()
+	fmt.Println("Server is running on port 8080...")
+	http.ListenAndServe(":8080", nil)
+}
 
-	// 스크립트 로드
-	scriptFileName := os.Args[1]
-	scriptPath := ScriptsDir + scriptFileName
-	script, err := ioutil.ReadFile(scriptPath)
-	errors.HandleError(err, "Failed to read script file")
+func getHostList() []HostInfo {
+	files, err := ioutil.ReadDir(os.Getenv("HOME") + "/.ssh/config.d")
+	if err != nil {
+		fmt.Println("Error reading directory:", err)
+		return nil
+	}
 
-	// 원격 서버에서 스크립트 실행
-	err = session.Run("source $HOME/.profile; " + string(script))
-	errors.HandleError(err, "Failed to execute script")
+	var hostList []HostInfo
+	for _, file := range files {
+		if !file.IsDir() {
+			filePath := os.Getenv("HOME") + "/.ssh/config.d/" + file.Name()
+			hosts, err := getHosts(filePath)
+			if err != nil {
+				fmt.Println("Error reading file:", err)
+				continue
+			}
+			hostList = append(hostList, HostInfo{
+				FileName: file.Name(),
+				Hosts:    hosts,
+			})
+		}
+	}
+	return hostList
+}
+
+func getHosts(filePath string) ([]string, error) {
+	content, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(content), "\n")
+	var hosts []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Host ") {
+			hosts = append(hosts, strings.TrimSpace(line[5:]))
+		}
+	}
+	return hosts, nil
+}
+
+func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
+	t, err := template.ParseFiles(tmpl)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	err = t.Execute(w, data)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

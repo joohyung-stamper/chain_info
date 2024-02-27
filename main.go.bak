@@ -1,0 +1,67 @@
+package main
+
+import (
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"remote-script/utils/errors"
+	"remote-script/utils/ssh"
+
+	"github.com/joho/godotenv"
+)
+
+const (
+	ScriptsDir = "./scripts/"
+	ConfigPath = "./config/config.env"
+	EnvPath    = "./.env"
+)
+
+func main() {
+	// SSH 설정
+	err := godotenv.Load(EnvPath)
+	errors.HandleError(err, "Failed to load .env")
+	configEnv, err := godotenv.Read(ConfigPath)
+	errors.HandleError(err, "Failed to load config.env")
+
+	user := configEnv["REMOTE_USER"]
+	addr := configEnv["REMOTE_ADDR"]
+	privKey := os.Getenv("PRIVATE_KEY")
+
+	// SSH 세션 시작
+	session, err := ssh.ConnectSSH(addr, user, privKey)
+	errors.HandleError(err, "Failed to start SSH session")
+	defer session.Close()
+
+	// 스크립트 로드
+	scriptFileName := os.Args[1]
+	scriptPath := ScriptsDir + scriptFileName
+	script, err := ioutil.ReadFile(scriptPath)
+	errors.HandleError(err, "Failed to read script file")
+
+	// 원격 서버에서 스크립트 실행
+	err = session.Run("source $HOME/.profile; " + string(script))
+	errors.HandleError(err, "Failed to execute script")
+
+	// 웹 서버 핸들러
+	http.HandleFunc("/", handler)
+
+	// 웹 서버 시작
+	fmt.Println("Server is listening on port 55555...")
+	http.ListenAndServe(":55555", nil)
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	// 요청 메서드 확인
+	switch r.Method {
+	case "GET":
+		// GET 요청에 대한 응답
+		fmt.Fprintf(w, "Hello, World!")
+	case "POST":
+		// POST 요청에 대한 응답
+		fmt.Fprintf(w, "Received a POST request")
+	default:
+		// 지원하지 않는 요청 메서드에 대한 응답
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SSH Config Hosts</title>
+    <style>
+        * {
+            background-color: #333;
+            color: #fff;
+        }
+        .hidden {
+            display: none;
+        }
+        ul {
+            list-style: none;
+            font-size: 20px;
+            padding-left: 20px;
+            padding-bottom: 20px;
+            padding-top: 10px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <ul id="hostList">
+        {{range .}}
+        <li><span class="hostName">{{.FileName}}</span>
+            <ul class="hidden">
+                {{range .Hosts}}
+                <li><a href="/host-info?host={{.}}">{{.}}</a></li>
+                {{end}}
+            </ul>
+        </li>
+        {{end}}
+    </ul>
+    <script>
+        document.querySelectorAll('#hostList .hostName').forEach(item => {
+            item.addEventListener('click', event => {
+                const ul = item.nextElementSibling;
+                if (ul.classList.contains('hidden')) {
+                    ul.classList.remove('hidden');
+                } else {
+                    ul.classList.add('hidden');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
