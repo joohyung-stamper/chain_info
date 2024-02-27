@@ -1,18 +1,27 @@
 package main
 
 import (
+	"chain_info/utils/errors"
+	"chain_info/utls/ssh"
 	"fmt"
 	"html/template"
 	"io/ioutil"
 	"net/http"
 	"os"
-	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 type HostInfo struct {
 	FileName string
 	Hosts    []string
 }
+
+const (
+	ScriptsDir = "./scripts/"
+	ConfigPath = "./config/config.env"
+	EnvPath    = "./.env"
+)
 
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -58,18 +67,50 @@ func getHostList() []HostInfo {
 }
 
 func getHosts(filePath string) ([]string, error) {
-	content, err := ioutil.ReadFile(filePath)
+	// SSH 설정
+	err := godotenv.Load(EnvPath)
+	errors.HandleError(err, "Failed to load .env")
+	configEnv, err := godotenv.Read(ConfigPath)
+	errors.HandleError(err, "Failed to load config.env")
+
+	user := configEnv["REMOTE_USER"]
+	addr := configEnv["REMOTE_ADDR"]
+	privKey := os.Getenv("PRIVATE_KEY")
+
+	// SSH 세션 시작
+	session, err := ssh.ConnectSSH(addr, user, privKey)
+	errors.HandleError(err, "Failed to start SSH session")
+	defer session.Close()
+
+	// 스크립트 로드
+	scriptFileName := os.Args[1]
+	scriptPath := ScriptsDir + scriptFileName
+	script, err := ioutil.ReadFile(scriptPath)
+	errors.HandleError(err, "Failed to read script file")
+
+	// 원격 서버에서 스크립트 실행
+	err = session.Run("source $HOME/.profile; " + string(script))
+	errors.HandleError(err, "Failed to execute script")
+
+}
+
+func getHostInfo(hostName string) HostInfo {
+	// Host 정보를 기반으로 SSH 연결을 수행하고 Host 정보를 반환
+	addr := fmt.Sprintf("%s:%d", hostName, 22) // 예: "141.94.248.105:22"
+	user := "sei"                              // 예: "sei"
+	privKeyPath := os.Getenv("HOME") + "/.env" // .env 파일 경로
+
+	session, err := ssh.ConnectSSH(addr, user, privKeyPath)
 	if err != nil {
-		return nil, err
+		fmt.Println("Failed to establish SSH connection:", err)
+		return HostInfo{}
 	}
-	lines := strings.Split(string(content), "\n")
-	var hosts []string
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Host ") {
-			hosts = append(hosts, strings.TrimSpace(line[5:]))
-		}
+	defer session.Close()
+
+	return HostInfo{
+		// HostName: hostName,
+		// User:     user,
 	}
-	return hosts, nil
 }
 
 func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
